@@ -27,6 +27,9 @@ Where SSH is used as a transport, specify a SSH private key to use. This is usef
 : `--stability=<stability>`, `-s <stability>`
 Set the required stability. Must be one of: 'dev', 'alpha', 'beta', 'RC', 'stable'. Note this differs from a constraint in that the stability must match exactly.
 
+: `--git=<cmd>`, `-g <cmd>`
+Specify location of the git command (can also use the GITCMD enviroment variable)
+
 : `--verbose`, `-v`
 Print additional debugging output
 

@@ -40,12 +40,13 @@ function usage(bool $long = false): void
  */
 function getRepoVersions(string $repo, ?string $sshKey = null, ?VersionParser $versionParser = null): array
 {
-    global $VERBOSE;
+    global $VERBOSE, $GITCMD;
     if (is_dir($repo)) {
-        $command = sprintf('git -C %s show-ref --tags --heads', escapeshellarg($repo));
+        $command = sprintf('%s -C %s show-ref --tags --heads', $GITCMD, escapeshellarg($repo));
     } else {
         $command = sprintf(
-            "git%s ls-remote -q --heads --tags %s",
+            "%s%s ls-remote -q --heads --tags %s",
+            $GITCMD,
             $sshKey !== null ?  ' -c core.sshCommand=' . escapeshellarg('ssh -i ' . $sshKey) : '',
             escapeshellarg($repo),
         );
@@ -125,8 +126,12 @@ function filterByStability(
  */
 function main(array $argv): void
 {
-    global $VERBOSE;
-    $opts = getopt('r:k:s:vh?', ['repo::', 'sshkey::', 'stability::','verbose', 'help'], $rest_index);
+    global $VERBOSE, $GITCMD;
+    $opts = getopt(
+        'r:k:s:g:vh?',
+        ['repo::', 'sshkey::', 'stability::', 'git::', 'verbose', 'help'],
+        $rest_index,
+    );
     $VERBOSE = isset($opts['verbose']) || isset($opts['v']);
     if (isset($opts['help']) || isset($opts['?']) || isset($opts['h'])) {
         usage(true);
@@ -140,6 +145,11 @@ function main(array $argv): void
     $repo = $opts['repo'] ?? $opts['r'] ?? '.';
     /** @var string|null $sshKey The path to the SSH key for accessing the repository. */
     $sshKey = $opts['sshkey'] ?? $opts['k'] ?? null;
+    /** @var string|null $gitCmd The Git command specified via options or environment variable. */
+    $gitCmd = $opts['git'] ?? $opts['g'] ?? (getenv('GITCMD') ?: null);
+    if ($gitCmd !== null) {
+        $GITCMD = escapeshellcmd($gitCmd);
+    }
 
     $versionParser = new VersionParser();
     /** @var string|null $requiredStability The mandatory stability (e.g., 'stable', 'beta'). */
@@ -189,7 +199,10 @@ if (PHP_SAPI !== 'cli' && PHP_SAPI !== 'phpdbg') {
 
 setlocale(LC_ALL, 'C');
 require __DIR__ . '/../vendor/autoload.php';
+/** @var bool $VERBOSE Whether to enable verbose output. */
 $VERBOSE = false;
+/** @var string $GITCMD The Git command to use. */
+$GITCMD = 'git';
 
 set_exception_handler(function (Throwable $e): void {
     global $VERBOSE;
