@@ -32,7 +32,7 @@ jobs:
         run: composer validate
 
       - name: Install Composer dependencies
-        run: composer install --no-dev --optimize-autoloader --prefer-dist --no-progress
+        run: composer install --optimize-autoloader --prefer-dist --no-progress
 
       - name: PHP Code Sniffer
         run: vendor/bin/phpcs
