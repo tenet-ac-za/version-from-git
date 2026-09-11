@@ -5,6 +5,8 @@
 
 declare(strict_types=1);
 
+define('PROGRAM_NAME', basename($argv[0] ?? __FILE__));
+
 use Composer\Semver\Semver;
 use Composer\Semver\VersionParser;
 
@@ -18,7 +20,7 @@ function usage(bool $long = false): void
     global $argv;
     fwrite(
         STDERR,
-        'Usage: ' . basename($argv[0]) . ' [--repo=<repo>] [--sshkey=<ssh_key>] <constraint[@stability]>' . PHP_EOL,
+        'Usage: ' . PROGRAM_NAME . ' [--repo=<repo>] [--sshkey=<ssh_key>] <constraint[@stability]>' . PHP_EOL,
     );
     if ($long) {
         fwrite(STDERR, 'Options:' . PHP_EOL);
@@ -191,7 +193,7 @@ function main(array $argv): void
 if (PHP_SAPI !== 'cli' && PHP_SAPI !== 'phpdbg') {
     fwrite(
         STDERR,
-        'Warning: ' . basename($argv[0]) . ' should be invoked via the CLI version of PHP, not the '
+        'Warning: ' . PROGRAM_NAME . ' should be invoked via the CLI version of PHP, not the '
         . PHP_SAPI . ' SAPI' . PHP_EOL,
     );
     exit(1);
