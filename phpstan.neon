@@ -1,0 +1,7 @@
+parameters:
+  level: 8
+  paths:
+    - bin/version-from-git
+#includes:
+#  - phpstan-baseline.neon
+

@@ -1,0 +1,203 @@
+#!/usr/bin/env php
+<?php
+
+// phpcs:disable PSR1.Files.SideEffects.FoundWithSymbols
+
+declare(strict_types=1);
+
+use Composer\Semver\Semver;
+use Composer\Semver\VersionParser;
+
+/**
+ * Display the usage information for the script.
+ *
+ * @param bool $long Whether to display the long usage information.
+ */
+function usage(bool $long = false): void
+{
+    global $argv;
+    fwrite(
+        STDERR,
+        'Usage: ' . basename($argv[0]) . ' [--repo=<repo>] [--sshkey=<ssh_key>] <constraint[@stability]>' . PHP_EOL,
+    );
+    if ($long) {
+        fwrite(STDERR, 'Options:' . PHP_EOL);
+        fwrite(STDERR, '  --repo=<repo>       The git repository to query (default: current directory)' . PHP_EOL);
+        fwrite(STDERR, '  --sshkey=<ssh_key>  The SSH key to use for accessing the repository' . PHP_EOL);
+        fwrite(STDERR, '  --verbose, -v       Enable debug output' . PHP_EOL);
+        fwrite(STDERR, '  --help, -?          Show this help message' . PHP_EOL);
+    }
+    exit(2);
+}
+
+/**
+ * Get all versions (tags and branches) from a git repository.
+ *
+ * @param string $repo The path to the git repository or the remote URL.
+ * @param string|null $sshKey The SSH key to use for accessing the repository.
+ * @param \Composer\Semver\VersionParser|null $versionParser The version parser instance.
+ * @return array<string, string> An associative array of normalized versions to their git references.
+ */
+function getRepoVersions(string $repo, ?string $sshKey = null, ?VersionParser $versionParser = null): array
+{
+    global $VERBOSE;
+    if (is_dir($repo)) {
+        $command = sprintf('git -C %s show-ref --tags --heads', escapeshellarg($repo));
+    } else {
+        $command = sprintf(
+            "git%s ls-remote -q --heads --tags %s",
+            $sshKey !== null ?  ' -c core.sshCommand=' . escapeshellarg('ssh -i ' . $sshKey) : '',
+            escapeshellarg($repo),
+        );
+    }
+    $output = [];
+    $returnVar = 0;
+    if ($VERBOSE) {
+        echo "Executing command: $command" . PHP_EOL;
+    }
+    exec($command, $output, $returnVar);
+    if ($returnVar !== 0) {
+        throw new RuntimeException('Failed to get versions from git repository.');
+    }
+    $versions = [];
+    $versionParser = $versionParser ?? new VersionParser();
+    foreach ($output as $line) {
+        [,$ref] = preg_split('#\s+#', $line, 2) ?: [null, null];
+        if ($ref !== null && preg_match('#refs/(tags|heads)/(.+)$#', $ref, $matches)) {
+            $type = $matches[1];
+            $name = $matches[2];
+            if ($type === 'heads') {
+                $name = $versionParser->normalize(preg_match('/^\d+/', $name) ? $name . '-dev' : 'dev-' . $name);
+            } else {
+                $name = $versionParser->normalize($name);
+            }
+            $versions[$name] = $ref;
+        }
+    }
+    if ($VERBOSE) {
+        echo "Found versions: " . implode(', ', array_keys($versions)) . PHP_EOL;
+    }
+    return $versions;
+}
+
+/**
+ * Filter versions by stability.
+ *
+ * @param array<string> $versions The list of versions to filter.
+ * @param string $stability The desired stability (e.g., 'stable', 'beta').
+ * @param \Composer\Semver\VersionParser|null $versionParser The version parser instance.
+ * @return array<string> The filtered list of versions matching the desired stability.
+ */
+function filterByStability(
+    array $versions,
+    string $stability = 'stable',
+    bool $required = false,
+    ?VersionParser $versionParser = null,
+): array {
+    $versionParser = $versionParser ?? new VersionParser();
+    $stabilities = ['dev', 'alpha', 'beta', 'RC', 'stable'];
+    $stabilityIndex = array_search($stability, ['dev', 'alpha', 'beta', 'RC', 'stable'], true);
+
+    if ($stabilityIndex === false) {
+        throw new InvalidArgumentException("Invalid stability: $stability");
+    }
+
+    return array_filter(
+        $versions,
+        function (string $version) use ($versionParser, $stabilities, $stabilityIndex, $required): bool {
+            $versionStability = $versionParser->parseStability($version);
+            $versionStabilityIndex = array_search($versionStability, $stabilities, true);
+            if ($versionStabilityIndex === false) {
+                return false;
+            }
+            if ($required) {
+                return $versionStabilityIndex === $stabilityIndex;
+            }
+            return $versionStabilityIndex >= $stabilityIndex;
+        },
+    );
+}
+
+/**
+ * Main entry point of the script.
+ *
+ * @param array<string> $argv The command-line arguments.
+ */
+function main(array $argv): void
+{
+    global $VERBOSE;
+    $opts = getopt('r:k:s:vh?', ['repo::', 'sshkey::', 'stability::','verbose', 'help'], $rest_index);
+    $VERBOSE = isset($opts['verbose']) || isset($opts['v']);
+    if (isset($opts['help']) || isset($opts['?']) || isset($opts['h'])) {
+        usage(true);
+    }
+    $constraint = $argv[$rest_index] ?? '';
+    if ($constraint === '') {
+        usage();
+    }
+
+    /** @var string $repo The path to the Git repository. */
+    $repo = $opts['repo'] ?? $opts['r'] ?? '.';
+    /** @var string|null $sshKey The path to the SSH key for accessing the repository. */
+    $sshKey = $opts['sshkey'] ?? $opts['k'] ?? null;
+
+    $versionParser = new VersionParser();
+    /** @var string|null $requiredStability The mandatory stability (e.g., 'stable', 'beta'). */
+    $requiredStability = $opts['stability'] ?? $opts['s'] ?? null;
+    if ($requiredStability !== null) {
+        $requiredStability = $versionParser->normalizeStability($requiredStability);
+    }
+
+    /* get a list of versions from the repository */
+    $versions = getRepoVersions($repo, $sshKey, $versionParser);
+
+    $matchingVersions = Semver::satisfiedBy(array_keys($versions), $constraint);
+    if (empty($matchingVersions)) {
+        fwrite(STDERR, "No versions match the constraint: $constraint" . PHP_EOL);
+        exit(1);
+    }
+
+    $stability = $requiredStability ?? $versionParser->parseStability($constraint);
+    if ($VERBOSE) {
+        echo "Desired stability: $stability" . PHP_EOL;
+    }
+    $matchingVersions = filterByStability($matchingVersions, $stability, $requiredStability !== null, $versionParser);
+    if (empty($matchingVersions)) {
+        fwrite(STDERR, "No versions matching '$constraint' satisfy the stability constraint: $stability" . PHP_EOL);
+        exit(1);
+    }
+
+    $matchingVersions = Semver::sort($matchingVersions);
+    if ($VERBOSE) {
+        echo "Matching versions: " . implode(', ', $matchingVersions) . PHP_EOL;
+    }
+    $latestVersion = end($matchingVersions);
+
+    // @phpstan-ignore offsetAccess.notFound (empty check done before sort)
+    echo $versions[$latestVersion] . PHP_EOL;
+    exit(0);
+}
+
+if (PHP_SAPI !== 'cli' && PHP_SAPI !== 'phpdbg') {
+    fwrite(
+        STDERR,
+        'Warning: ' . basename($argv[0]) . ' should be invoked via the CLI version of PHP, not the '
+        . PHP_SAPI . ' SAPI' . PHP_EOL,
+    );
+    exit(1);
+}
+
+setlocale(LC_ALL, 'C');
+require __DIR__ . '/../vendor/autoload.php';
+$VERBOSE = false;
+
+set_exception_handler(function (Throwable $e): void {
+    global $VERBOSE;
+    fwrite(STDERR, 'Error: ' . $e->getMessage() . PHP_EOL);
+    if ($VERBOSE) {
+        fwrite(STDERR, $e->getTraceAsString() . PHP_EOL);
+    }
+    exit(1);
+});
+
+main($argv ?? []);

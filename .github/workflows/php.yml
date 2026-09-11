@@ -1,0 +1,41 @@
+---
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  php:
+    name:  "Syntax and unit tests, PHP ${{ matrix.php-versions }}, ${{ matrix.operating-system }}"
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        php-version: ['8.5']
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php-version }}
+          tools: composer, composer-require-checker, composer-unused
+
+      - name: Setup problem matchers for PHP
+        run: echo "::add-matcher::${{ runner.tool_cache }}/php.json"
+
+      - name: Validate composer.json and composer.lock
+        run: composer validate
+
+      - name: Install Composer dependencies
+        run: composer install --no-dev --optimize-autoloader --prefer-dist --no-progress
+
+      - name: PHP Code Sniffer
+        run: vendor/bin/phpcs
+
+      - name: PHPStan
+        run: vendor/bin/phpstan analyze -c phpstan.neon

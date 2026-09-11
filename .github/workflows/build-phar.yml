@@ -1,0 +1,48 @@
+---
+name: Build and Release PHAR
+
+on:
+  push:
+    branches: [ main ]
+  release:
+    types: [ published ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          tools: box, composer
+
+      - name: Setup problem matchers for PHP
+        run: echo "::add-matcher::${{ runner.tool_cache }}/php.json"
+
+      - name: Validate composer.json and composer.lock
+        run: composer validate
+
+      - name: Install Composer dependencies
+        run: composer install --no-dev --optimize-autoloader --prefer-dist --no-progress
+
+      - name: Build PHAR with Box
+        run: box compile
+
+      - name: Upload PHAR Artifact (For Commit Pushes)
+        if: github.event_name != 'release'
+        uses: actions/upload-artifact@v3
+        with:
+          name: version-from-git-phar
+          path: build/version-from-git.phar
+
+      - name: Upload PHAR to Release Assets
+        if: github.event_name == 'release'
+        uses: svenstaro/upload-release-action@v2
+        with:
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          file: build/version-from-git.phar
+          asset_name: version-from-git.phar
+          tag: ${{ github.ref }}
