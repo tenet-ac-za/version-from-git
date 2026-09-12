@@ -20,15 +20,20 @@ function usage(bool $long = false): never
     global $argv;
     fwrite(
         STDERR,
-        'Usage: ' . PROGRAM_NAME . ' [--repo=<repo>] [--sshkey=<ssh_key>] <constraint[@stability]>' . PHP_EOL,
+        'Usage: ' . PROGRAM_NAME . ' [--repo=<repo>] [--output=<format>] <constraint[@stability]>' . PHP_EOL,
     );
     if ($long) {
         fwrite(STDERR, 'Options:' . PHP_EOL);
         fwrite(STDERR, '  --repo=<repo>       The git repository to query (default: current directory)' . PHP_EOL);
-        fwrite(STDERR, '  --verbose, -v       Enable debug output' . PHP_EOL);
-        fwrite(STDERR, '  --output=<output>   The output format for the version information' . PHP_EOL);
-        fwrite(STDERR, '  --verbose, -v       Enable debug output' . PHP_EOL);
+        fwrite(STDERR, '  --output=<format>   The output format for the version information' . PHP_EOL);
+        fwrite(STDERR, '  --stability=<stability>   The stability constraint for the version information' . PHP_EOL);
+        fwrite(STDERR, PHP_EOL);
         fwrite(STDERR, '  --help, -?          Show this help message' . PHP_EOL);
+        fwrite(STDERR, '  --verbose, -v       Enable debug output' . PHP_EOL);
+        fwrite(STDERR, '  --git=<git>         Path to the git executable to use' . PHP_EOL);
+        fwrite(STDERR, '  --sshkey=<ssh_key>  The SSH key to use for accessing the repository' . PHP_EOL);
+        fwrite(STDERR, PHP_EOL);
+        fwrite(STDERR, 'See also: https://github.com/tenet-ac-za/version-from-git/blob/main/README.md' . PHP_EOL);
     }
     exit(2);
 }

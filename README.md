@@ -2,17 +2,23 @@
 
 This finds the latest version of software from a Git repository, by matching tags or branches against a given version constraint. The idea is it can be used as a helper when installing software, to make sure we always find the right version to install.
 
+The original use case was to install a PHP application, hence it is written in PHP to take advantage of Composer's [semmvar](https://github.com/composer/semver) library. For ease of installation, it is distributed as a [PHP Archive (PHAR)](https://www.php.net/manual/en/book.phar.php) file. The latest version can be downloaded from [releases](https://github.com/tenet-ac-za/version-from-git/releases/).
+
 ## Usage
 
-`version-from-git.phar [--repo=<repo>] [--sshkey=<ssh_key>] <constraint[@stability]>`
+`version-from-git.phar [--repo=<repo>] [--output=<format>] <constraint[@stability]>`
+
+The only mandatory argument is a constraint string, which will be matched against the version(s) available in the git repository.
+
+The version constraints work best when semantic versioning is used, but other compatible version dotted numeric schemes are supported. Git repos are expected to use tags with the conventional "v" prefix for versions, as is common in many projects.
 
 ## Versions and constraints
 
-`version-from-git` uses Composer's [semmvar](https://github.com/composer/semver) to process constraint strings, meaning that you can specify versions and constraints exactly as you would with Composer. See the [versions and constraints](https://getcomposer.org/doc/articles/versions.md) documentation in Composer.
+`version-from-git` processes constraint strings in the same way as Composer, meaning that you can specify the versions and constraints you want to match exactly as you would with Composer. See Composer's [versions and constraints](https://getcomposer.org/doc/articles/versions.md) documentation for detais of the various options available.
 
-Note that individual commit hashes are not handled. Only branches and tags.
+Note that individual commit hashes are not currently handled. Only branches and tags. Branches must be specified with the `dev-` prefix per Composer's documentation.
 
-The default minimum stability is `stable`, which can be changed by appending a stability to the constraint string (e.g. `@dev`) as described in the Composer documentation.
+The default minimum stability is `stable`, which can be changed by appending a stability to the constraint string (e.g. `@dev`) as described in the Composer documentation. A specific stability can be enforced with the `--stability` option.
 
 ## Options
 
@@ -26,11 +32,11 @@ Examples:
 : `--sshkey=<key>`, `-k <key>`
 Where SSH is used as a transport, specify a SSH private key to use. This is useful where, for example, Github deploy keys have been used.
 
-: `--stability=<stability>`, `-s <stability>`
-Set the required stability. Must be one of: 'dev', 'alpha', 'beta', 'RC', 'stable'. Note this differs from a constraint in that the stability must match exactly.
-
 : `--output=<format>`, `-o <format>`
-Specify the output format. See below for the available options.
+Specify the output format. See below for the available options. Default is `refspec`.
+
+: `--stability=<stability>`, `-s <stability>`
+Set the required stability. Must be one of: 'dev', 'alpha', 'beta', 'RC', 'stable'. Note this differs from a constraint in that the stability must match exactly, hence there is no default.
 
 : `--git=<cmd>`, `-g <cmd>`
 Specify location of the git command (can also use the GITCMD enviroment variable)
