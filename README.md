@@ -35,3 +35,16 @@ Print additional debugging output
 
 : `--help`, `-h`, `-?`
 Print usage information
+
+## Output
+
+When a compatible version is found, its Git refspec is printed to stdout (e.g. `refs/tags/v1.0.0). This will always be the latest version that matches the constraints.
+
+If no version is found, no output is produced and a we exit with an error.
+
+## Exit codes
+
+0 - success: A version was found.
+1 - failure: No compatible version could be found.
+2 - error: some error condition occured, and the results are inconclusive.
+
