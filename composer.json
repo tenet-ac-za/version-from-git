@@ -17,6 +17,7 @@
         "source": "https://github.com/tenet-ac-za/version-from-git"
     },
     "require-dev": {
+        "php": "^8.1",
         "phpstan/phpstan": "^2.2",
         "squizlabs/php_codesniffer": "^4.0",
         "slevomat/coding-standard": "^8.25",
