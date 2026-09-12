@@ -15,7 +15,7 @@ use Composer\Semver\VersionParser;
  *
  * @param bool $long Whether to display the long usage information.
  */
-function usage(bool $long = false): void
+function usage(bool $long = false): never
 {
     global $argv;
     fwrite(
@@ -25,11 +25,47 @@ function usage(bool $long = false): void
     if ($long) {
         fwrite(STDERR, 'Options:' . PHP_EOL);
         fwrite(STDERR, '  --repo=<repo>       The git repository to query (default: current directory)' . PHP_EOL);
-        fwrite(STDERR, '  --sshkey=<ssh_key>  The SSH key to use for accessing the repository' . PHP_EOL);
+        fwrite(STDERR, '  --verbose, -v       Enable debug output' . PHP_EOL);
+        fwrite(STDERR, '  --output=<output>   The output format for the version information' . PHP_EOL);
         fwrite(STDERR, '  --verbose, -v       Enable debug output' . PHP_EOL);
         fwrite(STDERR, '  --help, -?          Show this help message' . PHP_EOL);
     }
     exit(2);
+}
+
+/**
+ * Display an error message and exit the script.
+ *
+ * @param string $message The error message to display.
+ * @param int $exitCode The exit code
+ * @param string $outform The output format (default: 'text').
+ */
+function error(string $message, int $exitCode = 1, string $outform = 'text'): never
+{
+    switch ($outform) {
+        case 'json':
+            echo json_encode(['error' => $message]);
+            break;
+        case 'text':
+        default:
+            fwrite(STDERR, $message . PHP_EOL);
+            break;
+    }
+
+    exit($exitCode);
+}
+
+/**
+ * Display a verbose message if verbose mode is enabled.
+ *
+ * @param string $message The message to display.
+ */
+function verbose(string $message): void
+{
+    global $VERBOSE;
+    if ($VERBOSE) {
+        echo $message . PHP_EOL;
+    }
 }
 
 /**
@@ -38,11 +74,11 @@ function usage(bool $long = false): void
  * @param string $repo The path to the git repository or the remote URL.
  * @param string|null $sshKey The SSH key to use for accessing the repository.
  * @param \Composer\Semver\VersionParser|null $versionParser The version parser instance.
- * @return array<string, string> An associative array of normalized versions to their git references.
+ * @return array<string, array{refspec: string, commit: string}> Normalized versions to their git references.
  */
 function getRepoVersions(string $repo, ?string $sshKey = null, ?VersionParser $versionParser = null): array
 {
-    global $VERBOSE, $GITCMD;
+    global $GITCMD;
     if (is_dir($repo)) {
         $command = sprintf('%s -C %s show-ref --tags --heads', $GITCMD, escapeshellarg($repo));
     } else {
@@ -55,18 +91,21 @@ function getRepoVersions(string $repo, ?string $sshKey = null, ?VersionParser $v
     }
     $output = [];
     $returnVar = 0;
-    if ($VERBOSE) {
-        echo "Executing command: $command" . PHP_EOL;
-    }
+
+    verbose("Executing command: $command");
     exec($command, $output, $returnVar);
     if ($returnVar !== 0) {
-        throw new RuntimeException('Failed to get versions from git repository.');
+        error('Failed to get versions from git repository', 2);
     }
+
     $versions = [];
     $versionParser = $versionParser ?? new VersionParser();
     foreach ($output as $line) {
-        [,$ref] = preg_split('#\s+#', $line, 2) ?: [null, null];
-        if ($ref !== null && preg_match('#refs/(tags|heads)/(.+)$#', $ref, $matches)) {
+        [$commit, $refspec] = preg_split('#\s+#', $line, 2) ?: [null, null];
+        if ($commit === null || $refspec === null) {
+            continue;
+        }
+        if (preg_match('#refs/(tags|heads)/(.+)$#', $refspec, $matches)) {
             $type = $matches[1];
             $name = $matches[2];
             if ($type === 'heads') {
@@ -74,12 +113,10 @@ function getRepoVersions(string $repo, ?string $sshKey = null, ?VersionParser $v
             } else {
                 $name = $versionParser->normalize($name);
             }
-            $versions[$name] = $ref;
+            $versions[$name] = ['refspec' => $refspec, 'commit' => $commit];
         }
     }
-    if ($VERBOSE) {
-        echo "Found versions: " . implode(', ', array_keys($versions)) . PHP_EOL;
-    }
+    verbose("Found versions: " . implode(', ', array_keys($versions)));
     return $versions;
 }
 
@@ -102,7 +139,7 @@ function filterByStability(
     $stabilityIndex = array_search($stability, ['dev', 'alpha', 'beta', 'RC', 'stable'], true);
 
     if ($stabilityIndex === false) {
-        throw new InvalidArgumentException("Invalid stability: $stability");
+        error("Invalid stability: $stability", 2);
     }
 
     return array_filter(
@@ -122,6 +159,66 @@ function filterByStability(
 }
 
 /**
+ * Format the output of the version information based on the specified format.
+ *
+ * @param string $outForm The output format ('refspec', 'text', 'branchtag', 'json').
+ * @param string $latest The latest version.
+ * @param array<string> $matchingVersions The list of versions matching the constraint.
+ * @param array<string, array{refspec: string, commit: string}> $versions The list of all versions.
+ * @return string The formatted output.
+ */
+function formatOutput(string $outForm, string $latest, array $matchingVersions, array $versions): string
+{
+    if ($latest === '' || empty($matchingVersions) || empty($versions)) {
+        return '';
+    }
+
+    $output = [
+        'latest' => [
+            'version' => $latest,
+            'refspec' => $versions[$latest]['refspec'] ?? '',
+            'refname' => preg_replace('#^refs/(heads|tags)/#', '', $versions[$latest]['refspec']) ?? '',
+            'reftype' => str_contains($versions[$latest]['refspec'] ?? '', 'refs/tags/') ? 'tag' : 'branch',
+            'commit' => $versions[$latest]['commit'] ?? '',
+        ],
+    ];
+    foreach ($matchingVersions as $version) {
+        $output['matching'][] = [
+            'version' => $version,
+            'refspec' => $versions[$version]['refspec'] ?? '',
+            'refname' => preg_replace('#^refs/(heads|tags)/#', '', $versions[$version]['refspec']) ?? '',
+            'reftype' => str_contains($versions[$version]['refspec'] ?? '', 'refs/tags/') ? 'tag' : 'branch',
+            'commit' => $versions[$version]['commit'] ?? '',
+        ];
+    }
+
+    switch ($outForm) {
+        case 'ref':
+        case 'refspec':
+            return $output['latest']['refspec'];
+        case 'refname':
+            return $output['latest']['refname'];
+        case 'commit':
+            return $output['latest']['commit'];
+        case 'composer':
+            return $output['latest']['version'];
+        case 'text':
+            return implode(
+                PHP_EOL,
+                array_map(
+                    fn(string $k, string $v): string => "$k: $v",
+                    array_keys($output['latest']),
+                    array_values($output['latest']),
+                ),
+            );
+        case 'json':
+            return json_encode($output, JSON_PRETTY_PRINT) ?: '{}';
+        default:
+            error("Invalid output format: $outForm", 2, $outForm);
+    }
+}
+
+/**
  * Main entry point of the script.
  *
  * @param array<string> $argv The command-line arguments.
@@ -130,8 +227,8 @@ function main(array $argv): void
 {
     global $VERBOSE, $GITCMD;
     $opts = getopt(
-        'r:k:s:g:vh?',
-        ['repo::', 'sshkey::', 'stability::', 'git::', 'verbose', 'help'],
+        'r:k:s:g:o:vh?',
+        ['repo::', 'sshkey::', 'stability::', 'git::', 'output::', 'verbose', 'help'],
         $rest_index,
     );
     $VERBOSE = isset($opts['verbose']) || isset($opts['v']);
@@ -140,7 +237,7 @@ function main(array $argv): void
     }
     $constraint = $argv[$rest_index] ?? '';
     if ($constraint === '') {
-        usage();
+        error("No version constraint specified", 2);
     }
 
     /** @var string $repo The path to the Git repository. */
@@ -152,6 +249,8 @@ function main(array $argv): void
     if ($gitCmd !== null) {
         $GITCMD = escapeshellcmd($gitCmd);
     }
+    /** @var string $outForm The output format for the version information. */
+    $outForm = $opts['output'] ?? $opts['o'] ?? 'refspec';
 
     $versionParser = new VersionParser();
     /** @var string|null $requiredStability The mandatory stability (e.g., 'stable', 'beta'). */
@@ -165,54 +264,41 @@ function main(array $argv): void
 
     $matchingVersions = Semver::satisfiedBy(array_keys($versions), $constraint);
     if (empty($matchingVersions)) {
-        fwrite(STDERR, "No versions match the constraint: $constraint" . PHP_EOL);
-        exit(1);
+        error("No versions match the constraint: $constraint", 1, $outForm);
     }
 
     $stability = $requiredStability ?? $versionParser->parseStability($constraint);
-    if ($VERBOSE) {
-        echo "Desired stability: $stability" . PHP_EOL;
-    }
+    verbose("Desired stability: $stability");
     $matchingVersions = filterByStability($matchingVersions, $stability, $requiredStability !== null, $versionParser);
     if (empty($matchingVersions)) {
-        fwrite(STDERR, "No versions matching '$constraint' satisfy the stability constraint: $stability" . PHP_EOL);
-        exit(1);
+        error("No versions matching '$constraint' satisfy the stability constraint: $stability", 1, $outForm);
     }
 
     $matchingVersions = Semver::sort($matchingVersions);
-    if ($VERBOSE) {
-        echo "Matching versions: " . implode(', ', $matchingVersions) . PHP_EOL;
-    }
-    $latestVersion = end($matchingVersions);
+    verbose("Matching versions: " . implode(', ', $matchingVersions));
+    $latestVersion = end($matchingVersions) ?: '';
 
-    // @phpstan-ignore offsetAccess.notFound (empty check done before sort)
-    echo $versions[$latestVersion] . PHP_EOL;
+    echo formatOutput($outForm, $latestVersion, $matchingVersions, $versions) . PHP_EOL;
     exit(0);
 }
 
 if (PHP_SAPI !== 'cli' && PHP_SAPI !== 'phpdbg') {
-    fwrite(
-        STDERR,
-        'Warning: ' . PROGRAM_NAME . ' should be invoked via the CLI version of PHP, not the '
-        . PHP_SAPI . ' SAPI' . PHP_EOL,
+    error(
+        'Warning: ' . PROGRAM_NAME . ' should be invoked via the CLI version of PHP, not the ' . PHP_SAPI . ' SAPI',
+        2,
     );
-    exit(1);
 }
+
+set_exception_handler(function (Throwable $e): void {
+    error('Unhandled exception: ' . $e->getMessage(), 2);
+});
 
 setlocale(LC_ALL, 'C');
 require __DIR__ . '/../vendor/autoload.php';
+
 /** @var bool $VERBOSE Whether to enable verbose output. */
 $VERBOSE = false;
 /** @var string $GITCMD The Git command to use. */
 $GITCMD = 'git';
-
-set_exception_handler(function (Throwable $e): void {
-    global $VERBOSE;
-    fwrite(STDERR, 'Error: ' . $e->getMessage() . PHP_EOL);
-    if ($VERBOSE) {
-        fwrite(STDERR, $e->getTraceAsString() . PHP_EOL);
-    }
-    exit(1);
-});
 
 main($argv ?? []);
