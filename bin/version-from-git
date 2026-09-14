@@ -6,6 +6,7 @@
 declare(strict_types=1);
 
 define('PROGRAM_NAME', basename($argv[0] ?? __FILE__));
+define('PROGRAM_VERSION', '@git-version@');
 
 use Composer\Semver\Semver;
 use Composer\Semver\VersionParser;
@@ -236,13 +237,16 @@ function main(array $argv): void
 {
     global $VERBOSE, $GITCMD;
     $opts = getopt(
-        'r:k:s:g:o:vh?',
-        ['repo::', 'sshkey::', 'stability::', 'git::', 'output::', 'verbose', 'help'],
+        'r:k:s:g:o:vVh?',
+        ['repo::', 'sshkey::', 'stability::', 'git::', 'output::', 'verbose', 'version', 'help'],
         $rest_index,
     );
     $VERBOSE = isset($opts['verbose']) || isset($opts['v']);
     if (isset($opts['help']) || isset($opts['?']) || isset($opts['h'])) {
         usage(true);
+    } elseif (isset($opts['version']) || isset($opts['V'])) {
+        echo PROGRAM_NAME . ' version ' . PROGRAM_VERSION . PHP_EOL;
+        exit(2);
     }
     $constraint = $argv[$rest_index] ?? '';
     if ($constraint === '') {

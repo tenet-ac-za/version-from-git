@@ -1,3 +1,4 @@
 {
-    "output": "build/version-from-git.phar"
+    "output": "build/version-from-git.phar",
+    "git-version": "git-version"
 }
