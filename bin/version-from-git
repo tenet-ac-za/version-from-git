@@ -295,7 +295,17 @@ if (PHP_SAPI !== 'cli' && PHP_SAPI !== 'phpdbg') {
 }
 
 set_exception_handler(function (Throwable $e): void {
-    error('Unhandled exception: ' . $e->getMessage(), 2);
+    verbose(sprintf(
+        'Unhandled exception: %s [%d]' . PHP_EOL . '%s',
+        $e->getMessage(),
+        $e->getCode(),
+        $e->getTraceAsString(),
+    ));
+    error(sprintf(
+        'Unhandled exception: %s [%d]',
+        $e->getMessage(),
+        $e->getCode(),
+    ), 2);
 });
 
 setlocale(LC_ALL, 'C');
