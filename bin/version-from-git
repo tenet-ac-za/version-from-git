@@ -116,7 +116,11 @@ function getRepoVersions(string $repo, ?string $sshKey = null, ?VersionParser $v
             if ($type === 'heads') {
                 $name = $versionParser->normalize(preg_match('/^\d+/', $name) ? $name . '-dev' : 'dev-' . $name);
             } else {
-                $name = $versionParser->normalize($name);
+                try {
+                    $name = $versionParser->normalize($name);
+                } catch (\UnexpectedValueException $e) {
+                    continue;
+                }
             }
             $versions[$name] = ['refspec' => $refspec, 'commit' => $commit];
         }
