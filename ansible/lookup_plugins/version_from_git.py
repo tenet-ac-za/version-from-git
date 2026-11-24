@@ -3,9 +3,12 @@
 import os
 import re
 import shlex
+import shutil
 import subprocess
+import tempfile
+from contextlib import contextmanager
 from functools import cmp_to_key
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, Iterator, List, Optional, Sequence, Tuple
 
 from ansible.errors import AnsibleError
 from ansible.plugins.lookup import LookupBase
@@ -404,9 +407,13 @@ options:
     type: string
     default: "."
   sshkey:
-    description: SSH private key path for remote Git access.
+    description: SSH private key path for remote Git access. Relative paths use Ansible's task search path.
     type: string
     secret: true
+  sshkey_temp_copy_unsafe:
+    description: Copy sshkey to a private temporary file if its permissions are too broad.
+    type: boolean
+    default: false
   stability:
     description: Require exactly this stability (dev, alpha, beta, RC, or stable).
     type: string
@@ -432,6 +439,10 @@ EXAMPLES = r"""
 - name: Find a matching release using the constraint option
   ansible.builtin.debug:
     msg: "{{ query('version_from_git', constraint='^1.2', repo='/srv/project')[0] }}"
+
+- name: Use a private temporary copy of a key from a filesystem with broad permissions
+  ansible.builtin.debug:
+    msg: "{{ query('version_from_git', '^1.2', repo='git@example.com:project.git', sshkey='keys/deploy', sshkey_temp_copy_unsafe=true)[0] }}"
 """
 
 RETURN = r"""
@@ -452,7 +463,8 @@ class LookupModule(LookupBase):
         self.set_options(var_options=variables, direct=kwargs)
         terms = _resolve_terms(terms, self.get_option("constraint"))
         repo = self.get_option("repo")
-        sshkey = self.get_option("sshkey")
+        sshkey = self._resolve_sshkey(self.get_option("sshkey"), variables)
+        sshkey_temp_copy_unsafe = self.get_option("sshkey_temp_copy_unsafe")
         git = self.get_option("git") or os.environ.get("GITCMD") or "git"
         output = self.get_option("output")
         stability = self.get_option("stability")
@@ -464,7 +476,9 @@ class LookupModule(LookupBase):
             except ConstraintError as exc:
                 raise AnsibleError(str(exc)) from exc
 
-        versions = self._get_versions(repo, sshkey, git, verbose)
+        versions = self._get_versions(
+            repo, sshkey, git, verbose, sshkey_temp_copy_unsafe
+        )
         results = []
         for constraint in terms:
             try:
@@ -508,34 +522,51 @@ class LookupModule(LookupBase):
             results.append(_format_result(output, latest, matching, versions))
         return results
 
+    def _resolve_sshkey(
+        self, sshkey: Optional[str], variables: Optional[Dict[str, Any]]
+    ) -> Optional[str]:
+        if sshkey is None:
+            return None
+
+        path = self.find_file_in_search_path(
+            variables or {}, "files", sshkey, ignore_missing=True
+        )
+        if path is None:
+            raise AnsibleError(
+                "Could not find SSH key {!r} in Ansible's task search path".format(
+                    sshkey
+                )
+            )
+        return path
+
     def _get_versions(
-        self, repo: str, sshkey: Optional[str], git: str, verbose: bool
+        self,
+        repo: str,
+        sshkey: Optional[str],
+        git: str,
+        verbose: bool,
+        sshkey_temp_copy_unsafe: bool = False,
     ) -> Dict[str, Dict[str, str]]:
         if os.path.isdir(repo):
             command = [git, "-C", repo, "show-ref", "--tags", "--heads"]
+            process = self._run_git(command, verbose)
         else:
-            command = [git]
-            if sshkey:
-                command.extend(
-                    ["-c", "core.sshCommand=ssh -i {}".format(shlex.quote(sshkey))]
-                )
-            command.extend(["ls-remote", "-q", "--heads", "--tags", repo])
+            with _sshkey_for_git(
+                sshkey, sshkey_temp_copy_unsafe, self._display.warning
+            ) as git_sshkey:
+                command = [git]
+                if git_sshkey:
+                    command.extend(
+                        [
+                            "-c",
+                            "core.sshCommand=ssh -i {} -o StrictHostKeyChecking=accept-new".format(
+                                shlex.quote(git_sshkey)
+                            ),
+                        ]
+                    )
+                command.extend(["ls-remote", "-q", "--heads", "--tags", repo])
+                process = self._run_git(command, verbose)
 
-        if verbose:
-            self._display.vvv(
-                "Executing Git command: {}".format(
-                    " ".join(shlex.quote(part) for part in command)
-                )
-            )
-        try:
-            process = subprocess.run(
-                command,
-                check=False,
-                capture_output=True,
-                text=True,
-            )
-        except OSError as exc:
-            raise AnsibleError("Could not execute Git: {}".format(exc)) from exc
         if process.returncode:
             detail = process.stderr.strip()
             message = "Failed to get versions from Git repository"
@@ -567,6 +598,24 @@ class LookupModule(LookupBase):
             }
         return versions
 
+    def _run_git(self, command: List[str], verbose: bool) -> subprocess.CompletedProcess:
+        if verbose:
+            self._display.vvv(
+                "Executing Git command: {}".format(
+                    " ".join(shlex.quote(part) for part in command)
+                )
+            )
+        try:
+            process = subprocess.run(
+                command,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+        except OSError as exc:
+            raise AnsibleError("Could not execute Git: {}".format(exc)) from exc
+        return process
+
 
 def _resolve_terms(terms: List[str], constraint: Optional[str]) -> List[str]:
     if terms and constraint is not None:
@@ -578,6 +627,66 @@ def _resolve_terms(terms: List[str], constraint: Optional[str]) -> List[str]:
     if not terms:
         raise AnsibleError("A version constraint must be specified as a positional term or constraint")
     return terms
+
+
+@contextmanager
+def _sshkey_for_git(
+    sshkey: Optional[str],
+    copy_to_temp: bool,
+    warning: Callable[[str], None],
+) -> Iterator[Optional[str]]:
+    if sshkey is None:
+        yield sshkey
+        return
+
+    if os.name == "posix":
+        try:
+            source_stat = os.stat(sshkey)
+        except OSError as exc:
+            raise AnsibleError(
+                "Could not inspect SSH key {!r}: {}".format(sshkey, exc)
+            ) from exc
+        if (
+            source_stat.st_uid == os.getuid()
+            and source_stat.st_mode & 0o400
+            and not source_stat.st_mode & 0o077
+        ):
+            yield sshkey
+            return
+        if not copy_to_temp:
+            warning(
+                "SSH key {!r} may have insecure permissions; if your filesystem "
+                "does not enforce private permissions, set "
+                "sshkey_temp_copy_unsafe to true to copy it to a private "
+                "temporary file".format(sshkey)
+            )
+            yield sshkey
+            return
+    elif not copy_to_temp:
+        yield sshkey
+        return
+
+    with tempfile.TemporaryDirectory(prefix="version-from-git-") as temp_dir:
+        temp_key = os.path.join(temp_dir, "sshkey")
+        try:
+            os.umask(0o077)
+            with open(sshkey, "rb") as source, open(temp_key, "xb") as destination:
+                shutil.copyfileobj(source, destination)
+            os.chmod(temp_key, 0o600)
+            if os.name == "posix":
+                for path in (temp_dir, temp_key):
+                    if os.stat(path).st_mode & 0o077:
+                        raise AnsibleError(
+                            "Temporary filesystem does not enforce private permissions; "
+                            "set TMPDIR to a filesystem that supports them"
+                        )
+        except OSError as exc:
+            raise AnsibleError(
+                "Could not create a private temporary copy of SSH key {!r}: {}".format(
+                    sshkey, exc
+                )
+            ) from exc
+        yield temp_key
 
 
 def _stability_rank(stability: str) -> int:

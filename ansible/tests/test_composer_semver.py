@@ -1,6 +1,7 @@
 import importlib.util
 import os
 import sys
+import tempfile
 import types
 import unittest
 
@@ -25,8 +26,10 @@ if importlib.util.find_spec("ansible") is None:
 from version_from_git import (
     AnsibleError,
     ConstraintError,
+    LookupModule,
     STABILITIES,
     _resolve_terms,
+    _sshkey_for_git,
     normalize_version,
     normalize_stability,
     parse_stability,
@@ -36,6 +39,72 @@ from version_from_git import (
 
 
 class ComposerSemverTests(unittest.TestCase):
+    def test_sshkey_temporary_copy_is_opt_in_private_and_cleaned_up(self):
+        with tempfile.TemporaryDirectory() as source_dir:
+            source_key = os.path.join(source_dir, "key")
+            with open(source_key, "wb") as key_file:
+                key_file.write(b"private-key-data")
+            if os.name == "posix":
+                os.chmod(source_key, 0o644)
+
+            warnings = []
+            with _sshkey_for_git(source_key, False, warnings.append) as unchanged_key:
+                self.assertEqual(unchanged_key, source_key)
+            if os.name == "posix":
+                self.assertEqual(len(warnings), 1)
+                self.assertIn("sshkey_temp_copy_unsafe", warnings[0])
+
+            with _sshkey_for_git(source_key, True, warnings.append) as copied_key:
+                self.assertNotEqual(copied_key, source_key)
+                with open(copied_key, "rb") as key_file:
+                    self.assertEqual(key_file.read(), b"private-key-data")
+                if os.name == "posix":
+                    self.assertEqual(os.stat(copied_key).st_mode & 0o777, 0o600)
+                    self.assertEqual(
+                        os.stat(os.path.dirname(copied_key)).st_mode & 0o777,
+                        0o700,
+                    )
+
+            self.assertFalse(os.path.exists(copied_key))
+
+    @unittest.skipUnless(os.name == "posix", "POSIX permission bits are required")
+    def test_sshkey_temporary_copy_reuses_private_key(self):
+        with tempfile.TemporaryDirectory() as source_dir:
+            source_key = os.path.join(source_dir, "key")
+            with open(source_key, "wb") as key_file:
+                key_file.write(b"private-key-data")
+            os.chmod(source_key, 0o600)
+
+            warnings = []
+            with _sshkey_for_git(source_key, True, warnings.append) as selected_key:
+                self.assertEqual(selected_key, source_key)
+            self.assertEqual(warnings, [])
+
+    def test_resolves_sshkey_through_ansible_task_search_path(self):
+        variables = {"playbook_dir": os.path.abspath("playbooks")}
+
+        class SearchPathLookup:
+            def find_file_in_search_path(
+                self, search_variables, subdir, path, ignore_missing=False
+            ):
+                self.call = (search_variables, subdir, path, ignore_missing)
+                return os.path.join(search_variables["playbook_dir"], "files", path)
+
+        lookup = SearchPathLookup()
+        self.assertEqual(
+            LookupModule._resolve_sshkey(lookup, "keys/deploy", variables),
+            os.path.join(variables["playbook_dir"], "files", "keys/deploy"),
+        )
+        self.assertEqual(lookup.call, (variables, "files", "keys/deploy", True))
+
+    def test_rejects_sshkey_not_found_in_ansible_search_path(self):
+        class SearchPathLookup:
+            def find_file_in_search_path(self, *args, **kwargs):
+                return None
+
+        with self.assertRaises(AnsibleError):
+            LookupModule._resolve_sshkey(SearchPathLookup(), "deploy-key", {})
+
     def test_accepts_positional_term_or_target_option(self):
         self.assertEqual(_resolve_terms(["^1.2"], None), ["^1.2"])
         self.assertEqual(_resolve_terms([], "^1.2"), ["^1.2"])
