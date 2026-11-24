@@ -59,6 +59,7 @@ def normalize_stability(stability: str) -> str:
 
 
 def parse_stability(version: str) -> str:
+    """Derive stability from an explicit @flag or the version's prerelease suffix."""
     version = version.split("#", 1)[0]
     stability_flag = _STABILITY_FLAG_RE.search(version)
     if stability_flag:
@@ -83,6 +84,7 @@ def parse_stability(version: str) -> str:
 
 
 def normalize_version(version: str) -> str:
+    """Normalize Git tag and branch spellings for the constraint matcher."""
     original = version
     version = version.strip()
     alias = re.match(r"^([^,\s]+)\s+as\s+([^,\s]+)$", version)
@@ -151,6 +153,7 @@ def normalize_version(version: str) -> str:
 
 
 def _normalize_branch(name: str) -> str:
+    """Map numeric wildcard branches to Composer's high-sorting development sentinel."""
     match = _BRANCH_VERSION.match(name.strip())
     if not match:
         return "dev-" + name.strip()
@@ -164,6 +167,7 @@ def _normalize_branch(name: str) -> str:
 
 
 def compare_versions(left: str, right: str) -> int:
+    """Compare normalized versions; any comparison involving a dev branch returns equal."""
     if left == right:
         return 0
     left_branch = left.startswith("dev-")
@@ -190,6 +194,7 @@ def compare_versions(left: str, right: str) -> int:
 
 
 def sort_versions(versions: Sequence[str]) -> List[str]:
+    """Sort versions while placing the default development branches above releases."""
     def sort_key(version: str) -> str:
         if version in ("dev-master", "dev-default", "dev-trunk"):
             return "9999999-dev"
@@ -202,6 +207,7 @@ def sort_versions(versions: Sequence[str]) -> List[str]:
 
 
 def satisfies(version: str, constraint: str) -> bool:
+    """Evaluate OR-separated constraint groups, each of which is an AND of comparisons."""
     candidate = normalize_version(version)
     groups = _parse_constraint(constraint)
     return any(
@@ -227,6 +233,7 @@ def _pre_rank(suffix: str, ranks: Dict[str, int]) -> Tuple[int, int]:
 
 
 def _parse_constraint(constraint: str) -> List[List[Tuple[str, str]]]:
+    """Split a constraint into OR groups and expand each group into comparisons."""
     if not constraint.strip():
         raise ConstraintError("Constraint must not be empty")
 
@@ -262,6 +269,7 @@ def _version_parts(version: str) -> Tuple[List[int], bool]:
 
 
 def _increment(parts: Sequence[int], position: int) -> str:
+    """Increment one version component and zero all less-significant components."""
     result = list(parts[:4])
     result.extend([0] * (4 - len(result)))
     result[position - 1] += 1
@@ -277,6 +285,7 @@ def _range_parts(
 
 
 def _parse_atom(atom: str) -> List[Tuple[str, str]]:
+    """Expand one Composer constraint atom into normalized comparison bounds."""
     atom = re.sub(r"#.+$", "", atom)
     stability = None
     flag = _STABILITY_FLAG_RE.search(atom)
@@ -347,6 +356,7 @@ def _parse_atom(atom: str) -> List[Tuple[str, str]]:
 
 
 def _hyphen_range(low_value: str, high_value: str) -> List[Tuple[str, str]]:
+    """Expand hyphen ranges; partial upper bounds end before the next component."""
     _, low_explicit = _version_parts(low_value)
     high_parts, high_explicit = _version_parts(high_value)
     low = normalize_version(low_value)
@@ -366,6 +376,7 @@ def _hyphen_range(low_value: str, high_value: str) -> List[Tuple[str, str]]:
 
 
 def _matches(candidate: str, operator: str, boundary: str) -> bool:
+    """Apply one comparison; development branch names support equality, not ordering."""
     if candidate.startswith("dev-") or boundary.startswith("dev-"):
         if operator in ("=", "=="):
             return candidate == boundary
@@ -460,6 +471,7 @@ class LookupModule(LookupBase):
         variables: Optional[Dict[str, Any]] = None,
         **kwargs: Any
     ) -> List[Any]:
+        """Resolve constraints against repository refs, filter by stability, and format results."""
         self.set_options(var_options=variables, direct=kwargs)
         terms = _resolve_terms(terms, self.get_option("constraint"))
         repo = self.get_option("repo")
@@ -547,6 +559,7 @@ class LookupModule(LookupBase):
         verbose: bool,
         sshkey_temp_copy_unsafe: bool = False,
     ) -> Dict[str, Dict[str, str]]:
+        """Read Git refs and retain version-like tags/branches with their source metadata."""
         if os.path.isdir(repo):
             command = [git, "-C", repo, "show-ref", "--tags", "--heads"]
             process = self._run_git(command, verbose)
@@ -635,6 +648,7 @@ def _sshkey_for_git(
     copy_to_temp: bool,
     warning: Callable[[str], None],
 ) -> Iterator[Optional[str]]:
+    """Use a private source key directly, warn on unsafe modes, or yield a temporary copy."""
     if sshkey is None:
         yield sshkey
         return
